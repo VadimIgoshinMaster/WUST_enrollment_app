@@ -1,0 +1,79 @@
+###########################
+In this code:
+
+The Flask web application has a route / where students can submit their enrollment applications.
+The submitted data (name, email, document) is saved in a SQLite database named students.db.
+Upon form submission, a PDF file is generated using the FPDF library containing the submitted data.
+The generated PDF file is then uploaded to an S3 bucket using the Boto3 library.
+Make sure to replace 'your-s3-bucket-name' with the name of your S3 bucket. Also, ensure that you have appropriate AWS credentials configured on your system to access the S3 bucket.
+
+Additionally, create an HTML template named enroll.html in a templates directory with the form fields for name, email, and document upload.
+############################
+
+
+from flask import Flask, request, render_template, redirect, url_for
+import sqlite3
+import boto3
+from botocore.exceptions import NoCredentialsError
+from fpdf import FPDF
+
+app = Flask(__name__)
+
+# SQLite database connection
+conn = sqlite3.connect('students.db')
+cursor = conn.cursor()
+
+# Create students table if not exists
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS students (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        document BLOB NOT NULL
+    )
+''')
+conn.commit()
+
+# AWS S3 configuration
+S3_BUCKET = 'your-s3-bucket-name'
+s3 = boto3.client('s3')
+
+@app.route('/', methods=['GET', 'POST'])
+def enroll():
+    if request.method == 'POST':
+        name = request.form['name']
+        email = request.form['email']
+        document = request.files['document'].read()
+
+        # Save student data to database
+        cursor.execute('''
+            INSERT INTO students (name, email, document)
+            VALUES (?, ?, ?)
+        ''', (name, email, document))
+        conn.commit()
+
+        # Generate PDF file
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        pdf.cell(200, 10, txt="Enrollment Application", ln=True, align='C')
+        pdf.cell(200, 10, txt="", ln=True)
+        pdf.cell(200, 10, txt=f"Name: {name}", ln=True)
+        pdf.cell(200, 10, txt=f"Email: {email}", ln=True)
+        pdf.output("enrollment_application.pdf")
+
+        # Upload PDF file to S3 bucket
+        try:
+            s3.upload_file("enrollment_application.pdf", S3_BUCKET, f"{name}_enrollment_application.pdf")
+        except NoCredentialsError:
+            return "Error: AWS credentials not found. Unable to upload document to S3."
+
+        return redirect(url_for('success'))
+    return render_template('enroll.html')
+
+@app.route('/success')
+def success():
+    return "Enrollment application submitted successfully!"
+
+if __name__ == '__main__':
+    app.run(debug=True)
